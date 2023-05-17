@@ -10,13 +10,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SpaceXLaunchBot/stats-server/internal/config"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/georgysavva/scany/v2/pgxscan"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SpaceXLaunchBot/stats-server/internal/config"
 )
+
+// Allow 1 request every n seconds to trigger a DB read / calculation.
+const globalRateLimit = 10 * time.Second
 
 type countRecord struct {
 	GuildCount      int    `db:"guild_count" json:"g"`
@@ -35,15 +39,20 @@ type statsResponse struct {
 }
 
 type server struct {
-	cfg               config.Config
-	dbPool            *pgxpool.Pool
-	lastResponseBytes []byte
-	lastUpdated       time.Time
+	dbPool        *pgxpool.Pool
+	lastRespBytes []byte
+	lastUpdated   time.Time
 	// For r/w to last* fields.
 	lastMu sync.Mutex
 }
 
-func (s *server) getStats() *statsResponse {
+func writeJSON(w http.ResponseWriter, data []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Write(data)
+}
+
+func (s *server) getStats() (*statsResponse, error) {
 	ctx := context.Background()
 
 	var countRecords []countRecord
@@ -55,7 +64,7 @@ func (s *server) getStats() *statsResponse {
 		FROM counts;`,
 	)
 	if err != nil {
-		log.Fatalf("FATAL: %s\n", err)
+		return nil, err
 	}
 
 	var actionCounts []actionCount
@@ -68,19 +77,13 @@ func (s *server) getStats() *statsResponse {
 		GROUP BY "action_formatted";`,
 	)
 	if err != nil {
-		log.Fatalf("FATAL: %s\n", err)
+		return nil, err
 	}
 
 	return &statsResponse{
 		Counts:       countRecords,
 		ActionCounts: actionCounts,
-	}
-}
-
-func writeJSON(w http.ResponseWriter, data []byte) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Write(data)
+	}, nil
 }
 
 func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -89,12 +92,12 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply rate limiting
+	// If rate limit is hit, return cached response.
 	s.lastMu.Lock()
-	if time.Since(s.lastUpdated) < time.Minute {
-		// If rate limit is hit, return cached response
-		responseJSON := make([]byte, len(s.lastResponseBytes))
-		copy(responseJSON, s.lastResponseBytes)
+	if time.Since(s.lastUpdated) < globalRateLimit {
+		// Copying means we don't have to hold the lock for w.Write, which might be slow or hang.
+		responseJSON := make([]byte, len(s.lastRespBytes))
+		copy(responseJSON, s.lastRespBytes)
 		s.lastMu.Unlock()
 
 		writeJSON(w, responseJSON)
@@ -102,20 +105,24 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	s.lastMu.Unlock()
 
-	stats := s.getStats()
+	stats, err := s.getStats()
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 
-	responseJSON, err := json.Marshal(stats)
+	responseJson, err := json.Marshal(stats)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
 	s.lastMu.Lock()
-	s.lastResponseBytes = responseJSON
+	s.lastRespBytes = responseJson
 	s.lastUpdated = time.Now()
 	s.lastMu.Unlock()
 
-	writeJSON(w, responseJSON)
+	writeJSON(w, responseJson)
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {
@@ -145,10 +152,11 @@ func main() {
 	}
 
 	s := server{
-		cfg:    c,
-		dbPool: db,
+		dbPool:        db,
+		lastRespBytes: []byte("{}"),
 		// Set an initial value for LastUpdated to a time in the past
 		lastUpdated: time.Now().Add(-time.Minute),
+		lastMu:      sync.Mutex{},
 	}
 
 	r := chi.NewRouter()
