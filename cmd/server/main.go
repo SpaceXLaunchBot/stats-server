@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 
 	"github.com/georgysavva/scany/v2/pgxscan"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,9 +24,9 @@ import (
 const globalRateLimit = 10 * time.Second
 
 type countRecord struct {
-	GuildCount      int    `db:"guild_count" json:"g"`
-	SubscribedCount int    `db:"subscribed_count" json:"s"`
-	Date            string `db:"date" json:"d"`
+	GuildCount      int       `db:"guild_count" json:"g"`
+	SubscribedCount int       `db:"subscribed_count" json:"s"`
+	Timestamp       time.Time `db:"time" json:"t"`
 }
 
 type actionCount struct {
@@ -56,12 +57,16 @@ func (s *server) getStats() (*statsResponse, error) {
 	ctx := context.Background()
 
 	var countRecords []countRecord
+	// Query constructed with help from ChatGPT!
+	// Get the highest of each count for each day.
 	err := pgxscan.Select(ctx, s.dbPool, &countRecords, `
 		SELECT
-			guild_count,
-			subscribed_count,
-			to_char("time", 'YYYY-MM-DD HH24:00:00') AS "date"
-		FROM counts;`,
+			MAX(guild_count) AS guild_count,
+			MAX(subscribed_count) AS subscribed_count,
+			date_trunc('day', "time") AS "time"
+		FROM counts
+		GROUP BY date_trunc('day', "time")
+		ORDER BY "time";`,
 	)
 	if err != nil {
 		return nil, err
@@ -125,10 +130,6 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, responseJson)
 }
 
-func health(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
-}
-
 func main() {
 	c, err := config.Get()
 	if err != nil {
@@ -163,11 +164,16 @@ func main() {
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{"HEAD", "GET", "OPTIONS"},
+	}))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
+	r.Use(middleware.Heartbeat("/debug/health"))
+
 	r.Get("/", s.handleRoot)
-	r.Get("/debug/health", health)
 
 	log.Println("Server listening on port 8080")
 	http.ListenAndServe(":8080", r)
