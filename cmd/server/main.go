@@ -161,13 +161,11 @@ func main() {
 	}
 
 	r := chi.NewRouter()
+	ofCors := cors.AllowAll()
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: []string{"*"},
-		AllowedMethods: []string{"HEAD", "GET", "OPTIONS"},
-	}))
+	r.Use(ofCors.Handler)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
