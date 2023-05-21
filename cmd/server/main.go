@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
+	"github.com/rs/cors"
 
 	"github.com/georgysavva/scany/v2/pgxscan"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -161,11 +161,10 @@ func main() {
 	}
 
 	r := chi.NewRouter()
-	ofCors := cors.AllowAll()
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(ofCors.Handler)
+	r.Use(cors.Default().Handler)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
