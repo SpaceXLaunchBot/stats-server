@@ -24,9 +24,9 @@ import (
 const globalRateLimit = 10 * time.Second
 
 type countRecord struct {
-	GuildCount      int       `db:"guild_count" json:"g"`
-	SubscribedCount int       `db:"subscribed_count" json:"s"`
-	Timestamp       time.Time `db:"time" json:"t"`
+	GuildCount      int    `db:"guild_count" json:"g"`
+	SubscribedCount int    `db:"subscribed_count" json:"s"`
+	Timestamp       string `db:"time" json:"t"`
 }
 
 type actionCount struct {
@@ -63,7 +63,7 @@ func (s *server) getStats() (*statsResponse, error) {
 		SELECT
 			guild_count,
 			subscribed_count,
-			to_char("time", 'YYYY-MM-DD') AS "date"
+			to_char("time", 'YYYY-MM-DD') AS "time"
 		FROM (
 			SELECT
 				MAX(guild_count) AS guild_count,
