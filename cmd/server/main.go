@@ -61,12 +61,18 @@ func (s *server) getStats() (*statsResponse, error) {
 	// Get the highest of each count for each day.
 	err := pgxscan.Select(ctx, s.dbPool, &countRecords, `
 		SELECT
-			MAX(guild_count) AS guild_count,
-			MAX(subscribed_count) AS subscribed_count,
-			date_trunc('day', "time") AS "time"
-		FROM counts
-		GROUP BY date_trunc('day', "time")
-		ORDER BY "time";`,
+			guild_count,
+			subscribed_count,
+			to_char("time", 'YYYY-MM-DD') AS "date"
+		FROM (
+			SELECT
+				MAX(guild_count) AS guild_count,
+				MAX(subscribed_count) AS subscribed_count,
+				date_trunc('day', "time") AS "time"
+			FROM counts
+			GROUP BY date_trunc('day', "time")
+			ORDER BY "time"
+		) AS subquery;`,
 	)
 	if err != nil {
 		return nil, err
