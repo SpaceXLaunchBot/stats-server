@@ -26,7 +26,7 @@ const globalRateLimit = 10 * time.Second
 type countRecord struct {
 	GuildCount      int    `db:"guild_count" json:"g"`
 	SubscribedCount int    `db:"subscribed_count" json:"s"`
-	Timestamp       string `db:"time" json:"t"`
+	Date            string `db:"date" json:"d"`
 }
 
 type actionCount struct {
@@ -47,13 +47,7 @@ type server struct {
 	lastMu sync.Mutex
 }
 
-func writeJSON(w http.ResponseWriter, data []byte) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Write(data)
-}
-
-func (s *server) getStats() (*statsResponse, error) {
+func (s *server) generateStatsRespJson() ([]byte, error) {
 	ctx := context.Background()
 
 	var countRecords []countRecord
@@ -63,7 +57,7 @@ func (s *server) getStats() (*statsResponse, error) {
 		SELECT
 			guild_count,
 			subscribed_count,
-			to_char("time", 'YYYY-MM-DD') AS "time"
+			to_char("time", 'YYYY-MM-DD') AS "date"
 		FROM (
 			SELECT
 				MAX(guild_count) AS guild_count,
@@ -81,20 +75,27 @@ func (s *server) getStats() (*statsResponse, error) {
 	var actionCounts []actionCount
 	err = pgxscan.Select(ctx, s.dbPool, &actionCounts, `
 		SELECT
-			replace(replace(replace(action, 'command_', ''), '_cmd', ''), '_', '') as "action_formatted",
-			count(action) as "count"
+			replace(replace(replace(action, 'command_', ''), '_cmd', ''), '_', '') AS "action_formatted",
+			count(action) AS "count"
 		FROM metrics
-		WHERE action like 'command_%'
+		WHERE action LIKE 'command_%'
 		GROUP BY "action_formatted";`,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return &statsResponse{
+	response := &statsResponse{
 		Counts:       countRecords,
 		ActionCounts: actionCounts,
-	}, nil
+	}
+
+	responseJson, err := json.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+
+	return responseJson, nil
 }
 
 func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -103,65 +104,67 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If rate limit is hit, return cached response.
+	var responseJson []byte
+	var err error
+
 	s.lastMu.Lock()
+
 	if time.Since(s.lastUpdated) < globalRateLimit {
+		// If rate limit is hit, return cached response.
 		// Copying means we don't have to hold the lock for w.Write, which might be slow or hang.
-		responseJSON := make([]byte, len(s.lastRespBytes))
-		copy(responseJSON, s.lastRespBytes)
-		s.lastMu.Unlock()
-
-		writeJSON(w, responseJSON)
-		return
+		responseJson = make([]byte, len(s.lastRespBytes))
+		copy(responseJson, s.lastRespBytes)
+	} else {
+		responseJson, err = s.generateStatsRespJson()
+		if err != nil {
+			s.lastMu.Unlock()
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		s.lastRespBytes = responseJson
+		s.lastUpdated = time.Now()
 	}
+
 	s.lastMu.Unlock()
 
-	stats, err := s.getStats()
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	responseJson, err := json.Marshal(stats)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	s.lastMu.Lock()
-	s.lastRespBytes = responseJson
-	s.lastUpdated = time.Now()
-	s.lastMu.Unlock()
-
-	writeJSON(w, responseJson)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(responseJson)))
+	w.Write(responseJson)
 }
 
 func main() {
+	// TODO: Properly use contexts everywhere.
+	ctx := context.Background()
+
 	c, err := config.Get()
 	if err != nil {
 		log.Fatalf("Failed to get config: %s", err)
 	}
-
 	log.Println("Config loaded")
 	log.Printf("DbHost: %s", c.DbHost)
 	log.Printf("DbPort: %d", c.DbPort)
 	log.Printf("DbUser: %s", c.DbUser)
 	log.Printf("DbName: %s", c.DbName)
 
-	dbConnStr := fmt.Sprintf(
+	db, err := pgxpool.New(ctx, fmt.Sprintf(
 		"postgres://%s:%s@%s:%d/%s",
 		c.DbUser, c.DbPass, c.DbHost, c.DbPort, c.DbName,
-	)
-
-	db, err := pgxpool.New(context.Background(), dbConnStr)
+	))
 	if err != nil {
 		log.Fatalf("Failed to pool db: %s", err)
 	}
+	log.Println("Created DB pool")
+
+	err = db.Ping(ctx)
+	if err != nil {
+		log.Fatalf("Failed to ping db: %s", err)
+	}
+	log.Println("Confirmed DB connection")
 
 	s := server{
 		dbPool:        db,
 		lastRespBytes: []byte("{}"),
-		// Set an initial value for LastUpdated to a time in the past
+		// Set an initial value for LastUpdated to a time in the past.
 		lastUpdated: time.Now().Add(-time.Minute),
 		lastMu:      sync.Mutex{},
 	}
@@ -174,7 +177,7 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	r.Use(middleware.Heartbeat("/debug/health"))
+	r.Use(middleware.Heartbeat("/health"))
 
 	r.Get("/", s.handleRoot)
 

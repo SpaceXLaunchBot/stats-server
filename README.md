@@ -1,3 +1,3 @@
 # Stats Server
 
-HTTP server that pulls stats from SpaceXLaunchBot's Postgres database and makes them available under a JSON endpoint.
+A basic web server to expose SpaceX Launch Bot's metrics in JSON over HTTP.
