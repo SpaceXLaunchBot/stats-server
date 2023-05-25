@@ -177,6 +177,8 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
+	r.Use(middleware.Compress(5))
+
 	r.Use(middleware.Heartbeat("/health"))
 
 	r.Get("/", s.handleRoot)
