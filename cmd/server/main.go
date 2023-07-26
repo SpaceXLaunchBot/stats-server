@@ -44,7 +44,7 @@ type server struct {
 	lastRespBytes []byte
 	lastUpdated   time.Time
 	// For r/w to last* fields.
-	lastMu sync.Mutex
+	mu sync.RWMutex
 }
 
 func (s *server) generateStatsRespJson() ([]byte, error) {
@@ -106,26 +106,26 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 	var responseJson []byte
 	var err error
-
-	s.lastMu.Lock()
+	s.mu.RLock()
 
 	if time.Since(s.lastUpdated) < globalRateLimit {
 		// If rate limit is hit, return cached response.
 		// Copying means we don't have to hold the lock for w.Write, which might be slow or hang.
 		responseJson = make([]byte, len(s.lastRespBytes))
 		copy(responseJson, s.lastRespBytes)
+		s.mu.RUnlock()
 	} else {
+		s.mu.RUnlock()
 		responseJson, err = s.generateStatsRespJson()
 		if err != nil {
-			s.lastMu.Unlock()
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
+		s.mu.Lock()
 		s.lastRespBytes = responseJson
 		s.lastUpdated = time.Now()
+		s.mu.Unlock()
 	}
-
-	s.lastMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(responseJson)))
@@ -166,18 +166,15 @@ func main() {
 		lastRespBytes: []byte("{}"),
 		// Set an initial value for LastUpdated to a time in the past.
 		lastUpdated: time.Now().Add(-time.Minute),
-		lastMu:      sync.Mutex{},
+		mu:          sync.RWMutex{},
 	}
 
 	r := chi.NewRouter()
 
-	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(cors.Default().Handler)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-
-	r.Use(middleware.Compress(5))
 
 	r.Use(middleware.Heartbeat("/health"))
 
