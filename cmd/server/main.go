@@ -175,6 +175,7 @@ func main() {
 	r.Use(cors.Default().Handler)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(middleware.GetHead)
 
 	r.Use(middleware.Heartbeat("/health"))
 
