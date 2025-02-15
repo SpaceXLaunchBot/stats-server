@@ -1,15 +1,12 @@
-FROM golang:latest AS builder
+FROM golang:alpine AS builder
 WORKDIR /build
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o ./server ./cmd/server/main.go
+RUN go build -o ./server .
 
 FROM alpine:latest
-
 WORKDIR /app
 COPY --from=builder /build/server .
-
 HEALTHCHECK --interval=5m --timeout=3s \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
-
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/health || exit 1
 EXPOSE 8080/tcp
 ENTRYPOINT ["./server"]
