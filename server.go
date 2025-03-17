@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/georgysavva/scany/v2/pgxscan"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const generateStatsResponseTimeout = 5 * time.Second
 
 type server struct {
-	db            *pgx.Conn
+	db            *pgxpool.Pool
 	dbCacheTime   time.Duration
 	lastRespBytes []byte
 	lastUpdated   time.Time

@@ -11,7 +11,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/cors"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // If the cached response is older than this, allow a given request to trigger a DB read
@@ -24,11 +24,11 @@ func main() {
 	pgSetupCtx, cancel := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancel()
 
-	db, err := pgx.Connect(pgSetupCtx, c.ConnectionString())
+	db, err := pgxpool.New(pgSetupCtx, c.ConnectionString())
 	if err != nil {
 		log.Fatalf("Failed to connect to db: %s", err)
 	}
-	defer db.Close(context.Background())
+	defer db.Close()
 	log.Println("Created DB connection")
 
 	err = db.Ping(pgSetupCtx)
